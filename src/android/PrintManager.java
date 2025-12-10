@@ -39,6 +39,10 @@ import org.json.JSONArray;
 import org.json.JSONObject;
 
 import java.io.InputStream;
+import android.util.Log;
+import android.util.DisplayMetrics;
+import android.os.Handler;
+import android.os.Looper;
 
 import static android.content.Context.PRINT_SERVICE;
 import static android.os.Build.VERSION.SDK_INT;
@@ -117,6 +121,15 @@ class PrintManager
     void print (@Nullable String content, @NonNull JSONObject settings,
                 @NonNull WebView view, @NonNull OnPrintFinishCallback callback)
     {
+        // Add content to settings so createWebView can see it
+        try {
+            if (content != null) {
+                settings.put("content", content);
+            }
+        } catch (Exception e) {
+            Log.e("PrintManager", "Failed to add content to settings", e);
+        }
+
         switch (PrintContent.getContentType(content, context))
         {
             case IMAGE:
@@ -179,24 +192,56 @@ class PrintManager
                                @NonNull JSONObject settings,
                                @NonNull OnPrintFinishCallback callback)
     {
+        Log.d("PrintManager", "printContent: " + content + " mimeType: " + mimeType);
         ((Activity) context).runOnUiThread(() -> {
             view = this.createWebView(settings);
 
+            // Set layout params to ensure the WebView has dimensions for layout
+            DisplayMetrics dm = context.getResources().getDisplayMetrics();
+            view.layout(0, 0, dm.widthPixels, dm.heightPixels);
+
             view.setWebViewClient(new WebViewClient() {
+                private boolean printJobStarted = false;
+
                 @Override
                 public boolean shouldOverrideUrlLoading (WebView view, String url) {
+                    // Return false to allow the WebView to load the URL
                     return false;
                 }
 
                 @Override
                 public void onPageFinished (WebView view, String url) {
-                    printWebView(PrintManager.this.view, settings, callback);
-                    PrintManager.this.view = null;
+                    Log.d("PrintManager", "onPageFinished: " + url);
+                    if (!printJobStarted) {
+                        printJobStarted = true;
+
+                        final WebView finalView = view;
+                        new Handler(Looper.getMainLooper()).postDelayed(() -> {
+                            Log.d("PrintManager", "Starting print job after delay");
+                            printWebView(finalView, settings, callback);
+                            PrintManager.this.view = null;
+                        }, 2000);
+                    }
+                }
+
+                @Override
+                public void onReceivedError(WebView view, int errorCode, String description, String failingUrl) {
+                    Log.e("PrintManager", "onReceivedError: " + errorCode + ", " + description + ", " + failingUrl);
+                    // Still proceed to print if we error out, so the user isn't stuck waiting forever,
+                    // or handle it gracefully. For now, let's at least log it strongly.
                 }
             });
 
-            view.loadDataWithBaseURL("file:///android_asset/www/", content, mimeType, "UTF-8",null);
+            if (isValidUrl(content)) {
+                view.loadUrl(content);
+            } else {
+                view.loadDataWithBaseURL("file:///android_asset/www/", content, mimeType, "UTF-8",null);
+            }
         });
+    }
+
+    private boolean isValidUrl(String str) {
+        return str != null && (str.startsWith("http://") || str.startsWith("https://"));
     }
 
     /**
@@ -299,6 +344,12 @@ class PrintManager
     private WebView createWebView (@NonNull JSONObject settings)
     {
         boolean jsEnabled = settings.optBoolean("javascript", false);
+        // Force enable JS if we are printing a remote URL
+        String content = settings.optString("content", "");
+        if (!jsEnabled && (content.startsWith("http://") || content.startsWith("https://"))) {
+             jsEnabled = true;
+        }
+
         WebView      view = new WebView(context);
         WebSettings  spec = view.getSettings();
         JSONObject   font = settings.optJSONObject("font");
@@ -319,6 +370,11 @@ class PrintManager
             spec.setMixedContentMode(WebSettings.MIXED_CONTENT_ALWAYS_ALLOW);
             CookieManager.getInstance().setAcceptThirdPartyCookies(view, true);
         }
+
+        spec.setDomStorageEnabled(true);
+        spec.setLoadsImagesAutomatically(true);
+        spec.setBlockNetworkImage(false);
+        spec.setLoadWithOverviewMode(true);
 
         return view;
     }

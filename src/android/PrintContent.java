@@ -31,6 +31,7 @@ import java.io.BufferedInputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.net.URLConnection;
+import android.util.Log;
 
 /**
  * Knows how to convert a resource URL into an io stream.
@@ -102,23 +103,29 @@ class PrintContent
                 mime = URLConnection.guessContentTypeFromName(path);
             }
 
-            switch (mime)
-            {
-                case "image/bmp":
-                case "image/png":
-                case "image/jpeg":
-                case "image/jpeg2000":
-                case "image/jp2":
-                case "image/gif":
-                case "image/x-icon":
-                case "image/vnd.microsoft.icon":
-                case "image/heif":
-                    return ContentType.IMAGE;
-                case "application/pdf":
-                    return ContentType.PDF;
-                default:
-                    return ContentType.UNSUPPORTED;
+            if (mime != null) {
+                switch (mime)
+                {
+                    case "image/bmp":
+                    case "image/png":
+                    case "image/jpeg":
+                    case "image/jpeg2000":
+                    case "image/jp2":
+                    case "image/gif":
+                    case "image/x-icon":
+                    case "image/vnd.microsoft.icon":
+                    case "image/heif":
+                        return ContentType.IMAGE;
+                    case "application/pdf":
+                        return ContentType.PDF;
+                }
             }
+
+            if (path.startsWith("http://") || path.startsWith("https://")) {
+                return ContentType.HTML;
+            }
+
+            return ContentType.UNSUPPORTED;
         }
 
         return type;
