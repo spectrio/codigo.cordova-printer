@@ -220,7 +220,7 @@ class PrintManager
                             Log.d("PrintManager", "Starting print job after delay");
                             printWebView(finalView, settings, callback);
                             PrintManager.this.view = null;
-                        }, 2000);
+                        }, 6000);
                     }
                 }
 
