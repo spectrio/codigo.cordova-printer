@@ -22,7 +22,9 @@
 package de.appplant.cordova.plugin.printer;
 
 import android.app.Activity;
+import android.app.AlertDialog;
 import android.content.Context;
+import android.content.DialogInterface;
 import android.graphics.Bitmap;
 import android.print.PrintAttributes;
 import android.print.PrintDocumentAdapter;
@@ -249,7 +251,7 @@ class PrintManager
      *
      * @param view     The web view instance to print.
      * @param settings Additional settings how to render the content.
-     * @param callback The function to invoke once the job is done.
+     * @param callback The function to invoke once the job is done (both completion and cancellation).
      */
     private void printWebView (@NonNull WebView view,
                                @NonNull JSONObject settings,
@@ -267,9 +269,12 @@ class PrintManager
                 adapter = view.createPrintDocumentAdapter();
             }
 
+            // Wrap adapter in PrintProxy to get callback when Android finishes printing
+            // This callback fires when: (1) print completes, (2) user cancels in system dialog
             PrintProxy proxy = new PrintProxy(adapter, () -> callback.onFinish(isPrintJobCompleted(jobName)));
 
-            printAdapter(proxy, options);
+            // Show confirmation dialog; the callback is also passed for pre-system-dialog cancellation
+            printAdapter(proxy, options, callback);
         });
     }
 
@@ -278,7 +283,7 @@ class PrintManager
      *
      * @param path     The path to the file to print.
      * @param settings Additional settings how to render the content.
-     * @param callback The function to invoke once the job is done.
+     * @param callback The function to invoke once the job is done (both completion and cancellation).
      */
     private void printPdf (@NonNull String path, @NonNull JSONObject settings,
                            @NonNull OnPrintFinishCallback callback)
@@ -290,9 +295,13 @@ class PrintManager
         PrintOptions options  = new PrintOptions(settings);
         String jobName        = options.getJobName();
         Integer pageCount     = options.getPageCount();
+        
+        // Create PrintAdapter with embedded callback that fires when Android finishes printing
+        // This callback fires when: (1) print completes, (2) user cancels in system dialog
         PrintAdapter adapter  = new PrintAdapter(jobName, pageCount, stream, () -> callback.onFinish(isPrintJobCompleted(jobName)));
 
-        printAdapter(adapter, options);
+        // Show confirmation dialog; the callback is also passed for pre-system-dialog cancellation
+        printAdapter(adapter, options, callback);
     }
 
     /**
@@ -304,10 +313,63 @@ class PrintManager
     private void printAdapter (@NonNull PrintDocumentAdapter adapter,
                                @NonNull PrintOptions options)
     {
+        printAdapter(adapter, options, null);
+    }
+
+    /**
+     * Prints the content provided by the print adapter with optional callback.
+     *
+     * IMPORTANT: The callback parameter is only used for pre-print dialog cancellation.
+     * Print completion/cancellation after the system dialog is handled by the adapter's
+     * embedded callback (PrintProxy or PrintAdapter's onFinish() method).
+     *
+     * @param adapter The adapter that holds the content (PrintProxy or PrintAdapter with embedded callback).
+     * @param options Additional settings how to render the content.
+     * @param callback Optional callback to invoke if user cancels at the confirmation dialog (before system print dialog).
+     */
+    private void printAdapter (@NonNull PrintDocumentAdapter adapter,
+                               @NonNull PrintOptions options,
+                               @Nullable OnPrintFinishCallback callback)
+    {
         String jobName        = options.getJobName();
         PrintAttributes attrs = options.toPrintAttributes();
 
-        getPrintService().print(jobName, adapter, attrs);
+        // Show confirmation dialog before printing
+        ((Activity) context).runOnUiThread(() -> {
+            new AlertDialog.Builder(context)
+                .setTitle("Print Document")
+                .setMessage("Ready to print \"" + jobName + "\". Continue to printer selection?")
+                .setPositiveButton("Print", new DialogInterface.OnClickListener() {
+                    @Override
+                    public void onClick(DialogInterface dialog, int which) {
+                        // User confirmed, proceed with printing
+                        // Note: Print completion is handled by adapter's onFinish() callback,
+                        // which is embedded in the PrintProxy/PrintAdapter passed to this method
+                        getPrintService().print(jobName, adapter, attrs);
+                    }
+                })
+                .setNegativeButton("Cancel", new DialogInterface.OnClickListener() {
+                    @Override
+                    public void onClick(DialogInterface dialog, int which) {
+                        // User cancelled at confirmation dialog (before system dialog)
+                        if (callback != null) {
+                            callback.onFinish(false);
+                        }
+                        dialog.dismiss();
+                    }
+                })
+                .setCancelable(true)
+                .setOnCancelListener(new DialogInterface.OnCancelListener() {
+                    @Override
+                    public void onCancel(DialogInterface dialog) {
+                        // User cancelled by pressing back or tapping outside (before system dialog)
+                        if (callback != null) {
+                            callback.onFinish(false);
+                        }
+                    }
+                })
+                .show();
+        });
     }
 
     /**
@@ -330,7 +392,36 @@ class PrintManager
 
         options.decoratePrintHelper(printer);
 
-        printer.printBitmap(jobName, bitmap, () -> callback.onFinish(isPrintJobCompleted(jobName)));
+        // Show confirmation dialog before printing
+        ((Activity) context).runOnUiThread(() -> {
+            new AlertDialog.Builder(context)
+                .setTitle("Print Image")
+                .setMessage("Ready to print \"" + jobName + "\". Continue to printer selection?")
+                .setPositiveButton("Print", new DialogInterface.OnClickListener() {
+                    @Override
+                    public void onClick(DialogInterface dialog, int which) {
+                        // User confirmed, proceed with printing
+                        printer.printBitmap(jobName, bitmap, () -> callback.onFinish(isPrintJobCompleted(jobName)));
+                    }
+                })
+                .setNegativeButton("Cancel", new DialogInterface.OnClickListener() {
+                    @Override
+                    public void onClick(DialogInterface dialog, int which) {
+                        // User cancelled, invoke callback with false
+                        callback.onFinish(false);
+                        dialog.dismiss();
+                    }
+                })
+                .setCancelable(true)
+                .setOnCancelListener(new DialogInterface.OnCancelListener() {
+                    @Override
+                    public void onCancel(DialogInterface dialog) {
+                        // User cancelled by pressing back or tapping outside
+                        callback.onFinish(false);
+                    }
+                })
+                .show();
+        });
     }
 
     /**
